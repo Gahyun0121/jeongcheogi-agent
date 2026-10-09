@@ -5,6 +5,7 @@ from app.nodes import (
     QuizState,
     analyze_weakness,
     ask_answer,
+    confirm_answer,
     generate_question,
     grade_answer,
     review_question,
@@ -32,10 +33,20 @@ def check_done(state: QuizState) -> str:
 
 
 def route_after_grade(state: QuizState) -> str:
-    """틀리면 오답 저장, 맞으면 바로 종료 조건 확인."""
-    if not state["is_correct"]:
-        return "save_wrong"
-    return check_done(state)
+    """맞으면 종료 조건 확인, 틀리면 사람 확인 (코드 문제는 바로 오답 저장)."""
+    if state["is_correct"]:
+        return check_done(state)
+    if state["question_type"] == "코드":
+        return "save_wrong"  # 출력값은 정확해야 해서 확인하지 않는다
+    return "confirm_answer"
+
+
+def route_after_confirm(state: QuizState) -> str:
+    """사람이 같은 뜻이라고 하면 정답, 아니면 오답 저장."""
+    if state["is_correct"]:
+        return check_done(state)
+    return "save_wrong"
+
 
 
 def build_graph():
@@ -47,6 +58,7 @@ def build_graph():
     graph.add_node("ask_answer", ask_answer)
     graph.add_node("grade_answer", grade_answer)
     graph.add_node("save_wrong", save_wrong)
+    graph.add_node("confirm_answer", confirm_answer)
 
     graph.add_edge(START, "analyze_weakness")
     graph.add_edge("analyze_weakness", "generate_question")
@@ -58,6 +70,10 @@ def build_graph():
     graph.add_edge("ask_answer", "grade_answer")
     graph.add_conditional_edges(
         "grade_answer", route_after_grade,
+        ["confirm_answer", "save_wrong", "analyze_weakness", END],
+    )
+    graph.add_conditional_edges(
+        "confirm_answer", route_after_confirm,
         ["save_wrong", "analyze_weakness", END],
     )
     graph.add_conditional_edges("save_wrong", check_done, ["analyze_weakness", END])

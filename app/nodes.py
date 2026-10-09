@@ -23,7 +23,6 @@ class Question(BaseModel):
     title: str = Field(description="문제 내용을 15자 안팎으로 요약한 제목. 예: static 메서드 업캐스팅 출력")
     question: str = Field(description="문제 본문")
     answer: str = Field(description="정답")
-    alternatives: list[str] = Field(description="단답형이면 정답과 같은 대상을 가리키는 다른 이름만 넣는다. 줄임말·풀네임·영문, 띄어쓰기·사이시옷 같은 표기 차이(예: 경계값/경곗값)도 포함한다. 다른 보기(오답)는 절대 넣지 않는다. 없으면 빈 리스트")
     key_points: list[str] = Field(description="약술형이면 채점용 핵심 단어 2~3개, 아니면 빈 리스트")
     code: str = Field(description="코드 문제면 실행 가능한 전체 코드, 아니면 빈 문자열")
 
@@ -31,7 +30,6 @@ class Review(BaseModel):
     """LLM이 검수 결과를 이 형식으로 돌려준다."""
     ok: bool = Field(description="문제가 없으면 true")
     reason: str = Field(description="탈락 이유. 통과면 빈 문자열")
-    bad_alternatives: list[str] = Field(description="인정 표현 중 정답과 다른 대상을 가리키는 것. 없으면 빈 리스트")
 
 
 # run_code가 실패했을 때 돌려주는 문장의 시작 부분
@@ -61,7 +59,6 @@ class QuizState(TypedDict):
     title: str              # 문제 요약 제목 (노션 제목용)
     question: str           # 문제 본문
     answer: str             # 정답
-    alternatives: list[str] # 단답형에서 정답으로 인정할 다른 표현
     key_points: list[str]   # 약술형 채점용 핵심 단어 2~3개
     language: str           # 코드 문제 언어 ("c" / "java" / "python")
     code: str               # 코드 문제의 코드
@@ -167,7 +164,6 @@ def generate_question(state: QuizState) -> dict:
         "title": q.title,
         "question": question,
         "answer": q.answer,
-        "alternatives": q.alternatives if qtype == "단답형" else [],
         "key_points": q.key_points,
         "language": language,
         "code": q.code if qtype == "코드" else "",  # 이론 문제에 코드가 섞이지 않게
@@ -203,28 +199,20 @@ def review_question(state: QuizState) -> dict:
 [유형] {state['question_type']}
 [문제] {state['question']}
 [정답] {state['answer']}
-
-단답형이면 인정 표현 {state['alternatives']}을 하나씩 검사하라.
-인정 표현은 정답과 같은 대상을 가리키는 다른 이름(줄임말, 영문, 표기 차이)이어야 한다.
-정답과 다른 대상을 가리키거나, 정답의 일부·종류만 가리키면 bad_alternatives에 넣는다.
 """
     r = llm.with_structured_output(Review).invoke(prompt)
     if not r.ok:
         print(f"[검수] 탈락 - {r.reason}")
         return {**fail, "review_feedback": r.reason}
 
-    # 잘못된 인정 표현은 탈락시키지 않고 빼기만 한다
-    alternatives = [a for a in state["alternatives"] if a not in r.bad_alternatives]
-    if r.bad_alternatives:
-        print(f"[검수] 잘못된 인정 표현 제거: {r.bad_alternatives}")
-
     print("[검수] 통과")
-    return {"review_ok": True, "alternatives": alternatives}
+    return {"review_ok": True}
 
 
 def ask_answer(state: QuizState) -> dict:
     """문제를 보여주고 사용자 답을 기다린다. (HITL)"""
     user_answer = interrupt({
+        "kind": "question",
         "question": state["question"],
         "code": state["code"],
         "type": state["question_type"],
@@ -253,11 +241,8 @@ def grade_answer(state: QuizState) -> dict:
         is_correct = len(hits) >= min(2, len(key_points))
         print(f"[채점] 핵심 단어 {len(hits)}/{len(key_points)}개 포함: {hits}")
     elif state["question_type"] == "단답형":
-        # 정답 또는 인정 표현 중 하나와 같으면 정답 (띄어쓰기 완전 무시)
-        accepted = [state["answer"], *state["alternatives"]]
-        is_correct = _compact(user) in [_compact(a) for a in accepted]
-        if not is_correct and state["alternatives"]:
-            print(f"[채점] 인정 표현: {state['alternatives']}")
+        # 띄어쓰기만 무시하고 엄격하게 비교 (같은 뜻인지는 사람이 확인)
+        is_correct = _compact(user) == _compact(state["answer"])
     else:
         # 코드: 출력값은 띄어쓰기도 의미가 있어서 한 칸으로만 맞춘다 ("10 20" ≠ "1020")
         is_correct = _normalize(user) == _normalize(state["answer"])
@@ -268,6 +253,15 @@ def grade_answer(state: QuizState) -> dict:
         "solved": state["solved"] + 1,
         "correct_count": state["correct_count"] + is_correct,
     }
+
+
+def confirm_answer(state: QuizState) -> dict:
+    """오답일 때 같은 뜻으로 썼는지 사람이 확인한다. (HITL)"""
+    reply = interrupt({"kind": "confirm", "answer": state["answer"]})
+    if reply.strip().lower() == "y":
+        print("[확인] 같은 뜻 → 정답 처리")
+        return {"is_correct": True, "correct_count": state["correct_count"] + 1}
+    return {}
 
 
 async def save_wrong(state: QuizState) -> dict:
