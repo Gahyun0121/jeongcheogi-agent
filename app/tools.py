@@ -1,4 +1,3 @@
-"""코드 문제의 정답을 확정하려고 실제로 코드를 실행하는 도구."""
 import subprocess
 import sys
 import tempfile
