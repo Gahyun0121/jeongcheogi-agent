@@ -1,10 +1,13 @@
 import random
 from typing import TypedDict
 from langchain_openai import ChatOpenAI
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
-from app.notion import get_wrong_counts
+from app.notion import get_wrong_counts, save_wrong_answer
 from app.rag import load_documents, search
+from app.tools import run_code
+
 
 WEAK_RATE = 0.7  # 약점 키워드를 뽑을 확률
 
@@ -18,6 +21,15 @@ class Question(BaseModel):
     key_points: list[str] = Field(description="약술형이면 채점용 핵심 단어 2~3개, 아니면 빈 리스트")
     language: str = Field(description='코드 문제면 "c", "java", "python" 중 하나, 아니면 빈 문자열')
     code: str = Field(description="코드 문제면 실행 가능한 전체 코드, 아니면 빈 문자열")
+
+class Review(BaseModel):
+    """LLM이 검수 결과를 이 형식으로 돌려준다."""
+    ok: bool = Field(description="문제가 없으면 true")
+    reason: str = Field(description="탈락 이유. 통과면 빈 문자열")
+
+
+# run_code가 실패했을 때 돌려주는 문장의 시작 부분
+ERROR_PREFIXES = ("컴파일 에러", "컴파일 경고", "실행 에러", "시간 초과", "지원하지 않는 언어")
 
 
 TYPE_GUIDE = {
@@ -113,3 +125,82 @@ def generate_question(state: QuizState) -> dict:
         "language": q.language.lower(),
         "code": q.code,
     }
+
+
+def review_question(state: QuizState) -> dict:
+    """문제를 검수한다. 코드 문제는 실제로 실행해서 정답을 확정한다."""
+    fail = {"review_ok": False, "retry_count": state["retry_count"] + 1}
+
+    # 코드 문제: LLM 정답 대신 실제 실행 결과를 정답으로 쓴다
+    if state["question_type"] == "코드":
+        output = run_code.invoke({"language": state["language"], "code": state["code"]})
+        if not output.strip() or output.startswith(ERROR_PREFIXES):
+            print("[검수] 탈락 - 코드 실행 실패")
+            return {**fail, "review_feedback": output[:500] or "출력이 없음"}
+
+        real = output.strip()
+        if real != state["answer"].strip():
+            print(f"[검수] LLM 정답 {state['answer']!r} → 실행 결과 {real!r}로 교체")
+        print("[검수] 통과")
+        return {"review_ok": True, "answer": real}
+
+    # 단답형·약술형: 자료와 비교해서 검사
+    prompt = f"""정보처리기사 실기 문제를 검수하라. 아래 기준 중 하나라도 어기면 탈락이다.
+1. 문제와 정답이 자료 내용과 맞는다.
+2. 정답이 하나로 정해진다. (단답형)
+3. 약술형이면 채점용 핵심 단어 {state['key_points']}가 자료에 있고, 정답에 들어 있다.
+
+[자료]
+{state['context']}
+
+[유형] {state['question_type']}
+[문제] {state['question']}
+[정답] {state['answer']}
+"""
+    r = llm.with_structured_output(Review).invoke(prompt)
+    if not r.ok:
+        print(f"[검수] 탈락 - {r.reason}")
+        return {**fail, "review_feedback": r.reason}
+
+    print("[검수] 통과")
+    return {"review_ok": True}
+
+
+def ask_answer(state: QuizState) -> dict:
+    """문제를 보여주고 사용자 답을 기다린다. (HITL)"""
+    user_answer = interrupt({"question": state["question"], "type": state["question_type"]})
+    return {"user_answer": user_answer.strip()}
+
+
+def _normalize(text: str) -> str:
+    """띄어쓰기·줄바꿈을 한 칸으로 맞추고 소문자로 바꾼다."""
+    return " ".join(text.split()).lower()
+
+
+def grade_answer(state: QuizState) -> dict:
+    """정답 여부를 고정 규칙으로 채점한다."""
+    user = state["user_answer"]
+
+    if state["question_type"] == "약술형":
+        # 핵심 단어 포함 여부 (띄어쓰기 무시)
+        compact = _normalize(user).replace(" ", "")
+        key_points = state["key_points"]
+        hits = [k for k in key_points if _normalize(k).replace(" ", "") in compact]
+        is_correct = len(hits) >= min(2, len(key_points))
+        print(f"[채점] 핵심 단어 {len(hits)}/{len(key_points)}개 포함: {hits}")
+    else:
+        is_correct = _normalize(user) == _normalize(state["answer"])
+
+    print(f"[채점] {'정답' if is_correct else '오답'} (정답: {state['answer']})")
+    return {
+        "is_correct": is_correct,
+        "solved": state["solved"] + 1,
+        "correct_count": state["correct_count"] + is_correct,
+    }
+
+
+async def save_wrong(state: QuizState) -> dict:
+    """틀린 문제를 노션 오답노트에 저장한다."""
+    await save_wrong_answer(state)
+    print("[저장] 노션 오답노트에 저장 완료")
+    return {}
