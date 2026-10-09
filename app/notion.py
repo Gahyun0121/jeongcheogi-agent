@@ -1,6 +1,5 @@
 import json
 import os
-from collections import Counter
 from datetime import date
 
 from dotenv import load_dotenv
@@ -27,31 +26,48 @@ async def _call(tool_name: str, args: dict) -> dict:
     tool = next(t for t in tools if t.name == tool_name)
     result = await tool.ainvoke(args)
     text = result[0]["text"] if isinstance(result, list) else result
-    return json.loads(text)
+    data = json.loads(text)
+    if data.get("object") == "error":
+        raise RuntimeError(f"노션 에러: {data.get('message')}")
+    return data
 
 
-async def get_wrong_counts() -> Counter:
-    """키워드별 오답 횟수를 센다."""
+
+async def get_wrong_records() -> dict[str, list[str]]:
+    """키워드별로 틀린 문제 제목을 모은다. (목록 길이 = 오답 횟수)"""
     data = await _call("API-query-data-source", {"data_source_id": DATA_SOURCE_ID})
-    counts = Counter()
+    records = {}
     for page in data["results"]:
-        select = page["properties"]["키워드"]["select"]
+        props = page["properties"]
+        select = props["키워드"]["select"]
         if select:
-            counts[select["name"]] += 1
-    return counts
+            title = "".join(t["plain_text"] for t in props["문제"]["title"])
+            records.setdefault(select["name"], []).append(title)
+    return records
+
 
 
 def _text(value: str) -> list[dict]:
     """노션 텍스트 형식으로 바꾼다. (노션 제한: 2000자)"""
+    # 노션 MCP 서버가 "[1, 2]" 같은 JSON 모양 글자를 리스트로 바꿔버려서,
+    # 앞에 안 보이는 글자(zero-width space)를 붙여 글자로 유지한다
+    if value.strip().startswith(("[", "{")):
+        value = "\u200b" + value
     return [{"text": {"content": value[:2000]}}]
+
 
 
 async def save_wrong_answer(state: dict) -> None:
     """틀린 문제를 오답 DB에 저장한다."""
+    # 페이지 본문: 문제 문장 + (코드 문제면) 코드 블록
+    children = [{"type": "paragraph", "paragraph": {"rich_text": _text(state["question"])}}]
+    if state["code"]:
+        children.append({"type": "code", "code": {"language": state["language"], "rich_text": _text(state["code"])}})
+
     await _call("API-post-page", {
         "parent": {"data_source_id": DATA_SOURCE_ID},
         "properties": {
-            "문제": {"title": _text(state["question"])},
+            "문제": {"title": _text(state["title"])},
             "키워드": {"select": {"name": state["keyword"]}},
             "과목": {"select": {"name": state["category"]}},
             "유형": {"select": {"name": state["question_type"]}},
@@ -59,9 +75,11 @@ async def save_wrong_answer(state: dict) -> None:
             "내 답": {"rich_text": _text(state["user_answer"])},
             "날짜": {"date": {"start": date.today().isoformat()}},
         },
+        "children": children,
     })
+
 
 
 if __name__ == "__main__":
     import asyncio
-    print(asyncio.run(get_wrong_counts()))
+    print(asyncio.run(get_wrong_records()))
