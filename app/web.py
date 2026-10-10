@@ -45,18 +45,57 @@ st.markdown(
     .hero .chip {display: inline-block; margin-top: 1rem; padding: 0.35rem 0.9rem; border-radius: 999px;
                  background: rgba(255,255,255,0.7); font-weight: 700; font-size: 0.9rem;}
 
+    /* 홈 숫자 카드: 아래 두 상자와 같은 반투명 흰 바탕 (한 가지 색으로 통일) */
+    .stat {border-radius: 16px; padding: 1rem 1.2rem; color: #2E2A3A;
+           background: rgba(255,255,255,0.6); border: 1px solid rgba(110,170,210,0.25);}
+    .stat .lbl {font-size: 0.85rem; color: #64748B;}
+    .stat .val {font-size: 2.3rem; font-weight: 500; line-height: 1.25; margin-top: 0.2rem;}
+    .stat .val small {font-size: 1rem; font-weight: 400; color: #64748B; margin-left: 4px;}
+    .stat .sub {font-size: 0.78rem; color: #94A3B8;}
+
+    /* 홈 아래 두 상자: 반투명 흰 바탕 */
+    .st-key-top3, .st-key-today {background: rgba(255,255,255,0.6); border: 1px solid rgba(110,170,210,0.25);
+                                 border-radius: 16px; padding: 1.1rem 1.2rem;}
+    .box-title {font-weight: 600; font-size: 1rem; color: #2E2A3A; margin-bottom: 0.6rem;}
+    .rank {display: flex; align-items: center; gap: 0.9rem; padding: 0.85rem 0;}
+    .rank + .rank {border-top: 1px dashed rgba(0,0,0,0.08);}
+    .rank .no {width: 28px; height: 28px; border-radius: 9px; font-weight: 600; color: #2E2A3A;
+               display: flex; align-items: center; justify-content: center; flex-shrink: 0;}
+    .rank .no.r1 {background: #BDEFDD;} .rank .no.r2 {background: #C4E4FF;} .rank .no.r3 {background: #CBD5FF;}
+    .rank .rk {flex: 1; min-width: 0;}
+    .rank .kw {font-size: 0.95rem; color: #2E2A3A; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+    .rank .bar {height: 6px; border-radius: 99px; background: rgba(0,0,0,0.05); margin-top: 0.55rem;}
+    .rank .bar span {display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, #8FDCC0 0%, #8EC5F5 100%);}
+    .rank .cnt {font-size: 0.85rem; font-weight: 600; color: #3D7FB8; flex-shrink: 0; margin-left: 0.2rem;}
+    .st-key-top3 .stButton {margin-top: 0.6rem;}
+    .today-kw {font-weight: 600; font-size: 1.1rem; color: #2E2A3A; margin: 0.6rem 0 0.7rem;}
+    .chip-cat {display: inline-block; font-size: 0.75rem; padding: 0.1rem 0.6rem; border-radius: 99px;
+               background: #E4E6FB; color: #4A5490; margin-bottom: 1rem;}
+    /* 오늘의 개념 본문: 강조 없이 담백하게, 행간 넉넉히 */
+    .st-key-today li {font-size: 0.92rem; line-height: 1.85; color: #4B5563; margin-bottom: 0.7rem;}
+    .st-key-today li li {font-size: 0.88rem; color: #6B7280; margin-top: 0.35rem;}
+
+    /* 채점 결과 카드: 글자는 진한 기본색, 색은 배경과 왼쪽 선에만 */
+    .card {padding: 0.9rem 1.2rem; border-radius: 14px; margin: 0.6rem 0; color: #2E2A3A;
+           line-height: 1.8; border-left: 5px solid;}
+    .card .head {font-weight: 700; margin-bottom: 0.3rem;}
+    .card .label {font-weight: 700; margin-right: 0.4rem;}
+    .card.ok {background: #E9F8F0; border-color: #3BB273;}
+    .card.bad {background: #FDEEEE; border-color: #E06464;}
+    .card.tip {background: #EEF5FD; border-color: #4A9AD4;}
+    .card code {font-size: 0.92em; color: #2E2A3A !important; background: rgba(255,255,255,0.75) !important;
+                padding: 0.08rem 0.35rem; border-radius: 6px;}  /* Streamlit 기본 코드 색을 덮어쓴다 */
+    .card pre {background: rgba(255,255,255,0.75); padding: 0.6rem 0.8rem; border-radius: 8px;
+               margin: 0.3rem 0 0; line-height: 1.5;}
+
     /* 페이지 위 공지 배너 */
     .notice {padding: 0.6rem 1rem; border-radius: 14px; margin-bottom: 1rem; font-size: 0.92rem;
              background: linear-gradient(90deg, #DDF5EC 0%, #E1EEFF 100%); border: 1px solid rgba(110,170,210,0.35);}
 
-    /* 동작 단계 카드: 단계마다 다른 파스텔 */
-    .step {padding: 1rem; border-radius: 16px; height: 100%; border: 1px solid rgba(0,0,0,0.04);}
-    .step.s1 {background: #DDF5EC;}
-    .step.s2 {background: #DCF0FB;}
-    .step.s3 {background: #E0EAFF;}
-    .step.s4 {background: #E4E6FB;}
-    .step .num {font-size: 0.8rem; font-weight: 700; opacity: 0.6;}
-    .step .title {font-weight: 700; margin: 0.2rem 0 0.3rem;}
+    /* 동작 단계 카드: 한 가지 연한 하늘색으로 통일, 높이도 맞춤 */
+    .step {padding: 1rem; border-radius: 16px; min-height: 9.5rem; background: #E8F3FC; border: 1px solid rgba(110,170,210,0.2);}
+    .step .num {font-size: 0.78rem; font-weight: 600; color: #4A9AD4;}
+    .step .title {font-weight: 600; margin: 0.25rem 0 0.35rem;}
     .step .desc {font-size: 0.85rem; opacity: 0.8; line-height: 1.5;}
     </style>""",
     unsafe_allow_html=True,
@@ -95,18 +134,21 @@ def interrupt_kind() -> str | None:
 def snapshot() -> dict:
     """채점 결과를 보여주려고, 답을 내기 직전의 문제 정보를 저장해 둔다."""
     v = graph_values()
-    snap = {k: v.get(k) for k in ["question", "language", "question_type", "question_format", "keyword"]}
+    snap = {k: v.get(k) for k in ["question", "language", "question_type", "question_format", "keyword", "answer", "explanation"]}
     snap["code"] = v.get("shown_code")  # 코드 빈칸이면 빈칸 처리된 코드
     return snap
 
 
-def start(total: int) -> None:
+SCOPES = {"전체": "전체", "코드만": "코드", "이론만": "이론"}  # 화면 이름 → State scope
+
+
+def start(total: int, scope: str) -> None:
     ss.graph = build_graph()
     ss.config = {"configurable": {"thread_id": str(uuid.uuid4())}}
     ss.total = total
     ss.gen_log = ss.grade_log = ""
     with st.spinner("첫 문제를 만드는 중..."):
-        run_graph({"solved": 0, "total": total, "correct_count": 0, "recent_keywords": []})
+        run_graph({"solved": 0, "total": total, "correct_count": 0, "recent_keywords": [], "scope": scope})
     ss.phase = "question"
     wrong_counts.clear()  # 개념 정리 페이지의 오답 횟수를 새로 불러오게
 
@@ -211,8 +253,8 @@ def home_page() -> None:
     st.markdown(
         f"""<div class="hero">
         <div class="eyebrow">정보처리기사 실기 · 약점 맞춤 출제 에이전트</div>
-        <h1>틀린 만큼, 똑똑하게 다시 출제해요</h1>
-        <p>문제를 풀수록 약점 키워드를 찾아 노션에 쌓고,<br>그 키워드 위주로 단답형·약술형·코드 문제를 만들어요.</p>
+        <h1>틀린 키워드, 맞힐 때까지</h1>
+        <p>틀린 키워드는 노션 오답노트에 쌓이고,<br>다음 문제는 그 키워드에서 더 자주 나와요.</p>
         {chip}
         </div>""",
         unsafe_allow_html=True,
@@ -223,10 +265,18 @@ def home_page() -> None:
 
     counts = wrong_counts()
     docs = load_documents()
-    c1, c2, c3 = st.columns(3)
-    c1.metric("누적 오답", f"{sum(counts.values())}개", border=True)
-    c2.metric("약점 키워드", f"{len(counts)}개", border=True)
-    c3.metric("개념 키워드", f"{len(docs)}개", border=True)
+    stats = [
+        ("누적 오답", sum(counts.values()), "오답노트에 쌓인 문제"),
+        ("약점 키워드", len(counts), "한 번 이상 틀린 키워드"),
+        ("개념 키워드", len(docs), "출제 범위"),
+    ]
+    for col, (label, value, sub) in zip(st.columns(3), stats):
+        col.markdown(
+            f'<div class="stat"><div class="lbl">{label}</div>'
+            f'<div class="val">{value}<small>개</small></div><div class="sub">{sub}</div></div>',
+            unsafe_allow_html=True,
+        )
+    st.write("")
 
     st.markdown("#### 이렇게 동작해요")
     for col, (num, title, desc) in zip(st.columns(4), STEPS):
@@ -238,21 +288,30 @@ def home_page() -> None:
 
     st.write("")
     left, right = st.columns(2)
-    with left.container(border=True):
-        st.markdown("##### 🔥 내 약점 TOP 3")
+    with left.container(key="top3"):
+        st.markdown('<div class="box-title">🔥 내 약점 TOP 3</div>', unsafe_allow_html=True)
         top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:3]
         if top:
-            for i, (k, n) in enumerate(top, 1):
-                st.markdown(f"**{i}.** {k} &nbsp; :red-badge[{n}회]")
+            rows = "".join(
+                f'<div class="rank"><div class="no r{i}">{i}</div><div class="rk">'
+                f'<div class="kw">{html.escape(k)}</div><div class="bar"><span style="width:{n / top[0][1] * 100:.0f}%"></span></div>'
+                f'</div><div class="cnt">{n}회</div></div>'
+                for i, (k, n) in enumerate(top, 1)
+            )
+            st.markdown(rows, unsafe_allow_html=True)
         else:
             st.caption("아직 오답이 없어요. 문제를 풀면 여기에 쌓여요.")
         if st.button("개념 정리 보기", width="stretch"):
             st.switch_page(PAGES["concept"])
 
-    with right.container(border=True):
+    with right.container(key="today"):
         today_doc = docs[date.today().toordinal() % len(docs)]  # 날짜마다 바뀌는 오늘의 개념
-        st.markdown("##### 💡 오늘의 개념")
-        st.markdown(f"**{today_doc.metadata['keyword']}** &nbsp; :gray-badge[{today_doc.metadata['category']}]")
+        st.markdown(
+            f'<div class="box-title">💡 오늘의 개념</div>'
+            f'<div class="today-kw">{html.escape(today_doc.metadata["keyword"])}</div>'
+            f'<span class="chip-cat">{html.escape(today_doc.metadata["category"])}</span>',
+            unsafe_allow_html=True,
+        )
         lines = [ln for ln in today_doc.page_content.splitlines()[1:] if not ln.startswith("- 빈도")]
         st.markdown("\n".join(lines[:4]))
 
@@ -263,6 +322,33 @@ def question_text(text: str, prev: bool = False) -> None:
     """문제 문장을 본문 크기로 보여준다. (마크다운 제목처럼 커지지 않게)"""
     body = html.escape(text).replace("\n", "<br>")
     st.markdown(f'<div class="question{" prev" if prev else ""}">{body}</div>', unsafe_allow_html=True)
+
+
+def inline_code(text: str) -> str:
+    """`백틱`으로 감싼 부분만 코드 글씨로 바꾼 HTML. 나머지는 그대로 글자로 보여준다."""
+    parts = html.escape(text).split("`")
+    for i in range(1, len(parts), 2):  # 홀수 칸이 백틱 안
+        parts[i] = f"<code>{parts[i]}</code>"
+    return "".join(parts).replace("\n", "<br>")
+
+
+def card(kind: str, head: str, body: str) -> None:
+    """채점 결과 카드. kind: ok(정답) / bad(오답) / tip(풀이)"""
+    st.markdown(f'<div class="card {kind}"><div class="head">{head}</div>{body}</div>', unsafe_allow_html=True)
+
+
+def answer_html(answer: str, is_code: bool) -> str:
+    """정답 줄. 코드 문제는 코드 글씨로 (여러 줄이면 상자로), 이론 문제는 일반 글씨로."""
+    if is_code and "\n" in answer:
+        return f'<span class="label">정답</span><pre>{html.escape(answer)}</pre>'
+    if is_code:
+        return f'<span class="label">정답</span><code>{html.escape(answer)}</code>'
+    return f'<span class="label">정답</span>{html.escape(answer)}'
+
+
+def explanation_box(text: str) -> None:
+    if text:
+        card("tip", "💡 풀이", inline_code(text))
 
 
 def header() -> None:
@@ -280,9 +366,10 @@ def start_card(title: str = "몇 문제 풀까요?", button: str = "시작하기
     with st.container(border=True):
         st.markdown(f"##### {title}")
         total = st.slider("문제 수", min_value=1, max_value=20, value=5, label_visibility="collapsed")
+        scope = st.segmented_control("출제 범위", list(SCOPES), default="전체")
         st.caption("틀린 문제는 노션 오답노트에 저장되고, 다음에 더 자주 나와요.")
         if st.button(button, type="primary", width="stretch"):
-            start(total)
+            start(total, SCOPES.get(scope, "전체"))  # 선택을 해제하면 None → 전체
             st.rerun()
 
 
@@ -328,7 +415,8 @@ def prev_question_box() -> None:
 def confirm_card() -> None:
     p = ss.prev
     prev_question_box()
-    st.error(f"**오답**\n\n정답: {p['answer']}")
+    card("bad", "❌ 오답", answer_html(p["answer"], p["question_type"] == "코드"))
+    explanation_box(p["explanation"])
     st.write("정답과 **같은 뜻**으로 썼나요? (표현만 다르거나 순서만 다른 경우)")
     c1, c2 = st.columns(2)
     if c1.button("같은 뜻이에요 → 정답 처리", width="stretch"):
@@ -342,10 +430,12 @@ def confirm_card() -> None:
 def feedback_card() -> None:
     p = ss.prev
     prev_question_box()
+    answer = answer_html(p["answer"], p["question_type"] == "코드")
     if p["is_correct"]:
-        st.success("**정답** (같은 뜻으로 인정)" if p.get("confirmed") else "**정답**")
+        card("ok", f"✅ 정답{' (같은 뜻으로 인정)' if p.get('confirmed') else ''}", answer)
     else:
-        st.error("**오답** · 노션 오답노트에 저장했어요")
+        card("bad", "❌ 오답 · 노션 오답노트에 저장했어요", answer)
+    explanation_box(p["explanation"])
 
     if ss.grade_log:
         with st.expander("채점 기록 보기"):

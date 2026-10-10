@@ -45,6 +45,7 @@ class Question(BaseModel):
     key_points: list[str] = Field(description="약술형이면 채점용 핵심 단어 2~3개, 아니면 빈 리스트")
     code: str = Field(description="코드 문제면 실행 가능한 전체 코드, 아니면 빈 문자열")
     blank: str = Field(description="코드 빈칸 문제면 code에서 빈칸으로 만들 짧은 코드 조각, 아니면 빈 문자열")
+    explanation: str = Field(description="정답 풀이 2~4문장. 이론은 왜 이 답인지 자료 근거로, 코드는 값이 바뀌는 과정을 따라가며 설명. 코드·식은 `백틱`으로 감싼다")
 
 class Review(BaseModel):
     """LLM이 검수 결과를 이 형식으로 돌려준다."""
@@ -91,7 +92,7 @@ FORMAT_GUIDE = {
                 "어떤 순서인지(예: 강한 것부터) 문제에 분명히 쓰고, 문제에 항목을 보여줄 때는 순서를 반드시 섞는다 (섞었다는 말은 쓰지 않는다). "
                 "answer에는 순서대로 쉼표로 구분해 쓴다.",
     "서술": "1~2문장으로 설명하는 문제. 채점용 핵심 단어 2~3개를 key_points에 넣는다. "
-            "핵심 단어는 괄호 없는 짧은 단어(1~2어절)로 쓴다.",
+            "핵심 단어는 괄호 없는 짧은 단어(1~2어절)로 쓰고, answer 문장에 글자 그대로 들어 있는 단어만 고른다.",
     "실행 결과": "코드의 출력 결과를 묻는 문제. " + CODE_RULES,
     "코드 빈칸": "실행 가능한 전체 코드를 code에 쓰고, 그중 빈칸으로 만들 짧은 코드 조각 하나(조건식, 연산자, 함수 호출 등)를 blank에 쓴다. "
               "blank는 짧게(30자 이내) 잡되, code 전체에서 딱 한 번만 나오는 조각이어야 한다. "
@@ -105,6 +106,7 @@ class QuizState(TypedDict):
     category: str           # 키워드의 과목
     past_titles: list[str]  # 이 키워드로 전에 틀린 문제 제목들 (같은 문제 반복 방지)
     recent_keywords: list[str]  # 최근 출제한 키워드 (연속 출제 방지)
+    scope: str              # 출제 범위: "전체" / "코드" / "이론" (화면에서 고름, 없으면 전체)
 
     # 2. 출제
     context: str            # RAG로 찾은 개념 자료
@@ -118,6 +120,7 @@ class QuizState(TypedDict):
     code: str               # 코드 문제의 전체 코드 (실행용)
     blank: str              # 코드 빈칸 문제에서 빈칸으로 만든 코드 조각
     shown_code: str         # 화면에 보여줄 코드 (코드 빈칸이면 빈칸 처리된 코드)
+    explanation: str        # 정답 풀이 (채점 후 보여줌)
 
     # 3. 검수
     review_ok: bool         # 검수 통과 여부
@@ -148,7 +151,13 @@ async def analyze_weakness(state: QuizState) -> dict:
     # 1) 코드/이론을 먼저 정한다 → 약점이 이론에 몰려 있어도 코드 문제 비율 유지
     coding = [k for k in candidates if categories[k] == "프로그래밍" and _language_ok(k)]
     theory = [k for k in candidates if categories[k] != "프로그래밍"]
-    pool = coding if coding and random.random() < CODE_RATE else theory
+    scope = state.get("scope", "전체")
+    if scope == "코드" and coding:
+        pool = coding
+    elif scope == "이론":
+        pool = theory
+    else:
+        pool = coding if coding and random.random() < CODE_RATE else theory
 
     # 2) 그 안에서 약점 키워드를 우선으로 뽑는다
     weak = {k: len(records[k]) for k in pool if k in records}
@@ -255,6 +264,7 @@ def generate_question(state: QuizState) -> dict:
         "code": q.code if is_code else "",  # 이론 문제에 코드가 섞이지 않게
         "blank": q.blank.strip() if fmt == "코드 빈칸" else "",
         "shown_code": "",  # 코드 문제는 검수에서 정한다
+        "explanation": q.explanation,
     }
 
 
@@ -285,16 +295,25 @@ def review_question(state: QuizState) -> dict:
             }
 
         # 실행 결과: LLM 정답 대신 실제 실행 결과를 정답으로 쓴다
+        explanation = state["explanation"]
         if real != state["answer"].strip():
             print(f"[검수] LLM 정답 {state['answer']!r} → 실행 결과 {real!r}로 교체")
+            explanation = _explain_code(state, real)  # 틀린 정답으로 쓴 풀이라 다시 쓴다
         print("[검수] 통과")
-        return {"review_ok": True, "answer": real, "shown_code": state["code"]}
+        return {"review_ok": True, "answer": real, "shown_code": state["code"], "explanation": explanation}
+
+    # 약술형: 모범 답안을 그대로 써도 정답이 되도록, 핵심 단어가 정답 문장에 글자 그대로 있는지 코드로 검사
+    missing = [k for k in state["key_points"] if _compact(k) not in _compact(state["answer"])]
+    if state["question_format"] == "서술" and missing:
+        print(f"[검수] 탈락 - 핵심 단어 {missing}가 정답 문장에 없음")
+        return {**fail, "review_feedback": f"핵심 단어 {missing}를 정답 문장에 글자 그대로 넣어라"}
 
     # 이론 문제: 자료와 비교해서 검사
     prompt = f"""정보처리기사 실기 문제를 검수하라. 아래 기준 중 하나라도 어기면 탈락이다.
 1. 문제와 정답이 자료 내용과 맞는다.
 2. 정답이 하나로 정해진다. 보기에서 고르기·빈칸 채우기·순서대로 쓰기는 정답 목록 전체가 하나로 정해진다.
 3. 약술형이면 채점용 핵심 단어 {state['key_points']}가 자료에 있고, 정답에 들어 있다.
+4. 풀이가 정답과 맞고, 자료 내용과 어긋나지 않는다.
 
 [자료]
 {state['context']}
@@ -302,6 +321,7 @@ def review_question(state: QuizState) -> dict:
 [유형] {state['question_type']} ({state['question_format']})
 [문제] {state['question']}
 [정답] {state['answer']}
+[풀이] {state['explanation']}
 """
     r = review_llm.with_structured_output(Review).invoke(prompt)
     if not r.ok:
@@ -310,6 +330,20 @@ def review_question(state: QuizState) -> dict:
 
     print("[검수] 통과")
     return {"review_ok": True}
+
+
+def _explain_code(state: QuizState, output: str) -> str:
+    """LLM 정답이 실행 결과와 다를 때, 실제 실행 결과에 맞춰 풀이를 다시 쓴다."""
+    prompt = f"""아래 {state['language']} 코드의 실제 실행 결과는 다음과 같다.
+[실행 결과]
+{output}
+
+이 결과가 나오는 과정을 2~4문장으로 풀이하라. 값이 바뀌는 과정을 따라가며 설명하고, 코드·식은 `백틱`으로 감싼다.
+
+[코드]
+{state['code']}
+"""
+    return gen_llm.invoke(prompt).content.strip()
 
 
 def ask_answer(state: QuizState) -> dict:
@@ -365,6 +399,7 @@ def grade_answer(state: QuizState) -> dict:
         is_correct = _normalize(user) == _normalize(answer)
 
     print(f"[채점] {'정답' if is_correct else '오답'} (정답: {state['answer']})")
+    print(f"[풀이] {state['explanation']}")
     return {
         "is_correct": is_correct,
         "solved": state["solved"] + 1,
