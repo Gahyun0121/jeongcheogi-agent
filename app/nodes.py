@@ -13,6 +13,7 @@ WEAK_RATE = 0.7  # 약점 키워드를 뽑을 확률
 RECENT_LIMIT = 3  # 최근 N문제에 나온 키워드는 다시 안 뽑음
 CODE_RATE = 0.4  # 랜덤 출제 때 코드 문제 비율 (실기는 코드 문제 비중이 큼)
 ESSAY_RATE = 0.3  # 이론 문제 중 약술형 비율 (최근 실기는 단답형 위주)
+WEAK_CAP = 3  # 오답 횟수 가중치 상한 (많이 틀린 키워드 하나에만 쏠리지 않게)
 
 
 llm = ChatOpenAI(model="gpt-5.4-mini")
@@ -35,6 +36,29 @@ class Review(BaseModel):
 # run_code가 실패했을 때 돌려주는 문장의 시작 부분
 ERROR_PREFIXES = ("컴파일 에러", "컴파일 경고", "실행 에러", "시간 초과", "지원하지 않는 언어")
 
+
+# 실기에서 자주 쓰는 문제 형식 (기출 원문이 아니라 묻는 방식만). 매번 하나를 골라 같은 키워드라도 다르게 묻는다.
+QUESTION_STYLES = {
+    "단답형": [
+        "설명을 읽고 해당하는 용어를 쓰는 문제",
+        "<보기>에 용어 4~6개만 나열하고, 설명에 맞는 용어 하나를 골라 쓰는 문제 (정답은 번호 없이 용어만)",
+        "문장 속 빈칸( ① ) 하나에 들어갈 용어를 쓰는 문제",
+        "사례나 상황을 주고, 그에 해당하는 개념을 쓰는 문제",
+    ],
+    "약술형": [
+        "개념의 정의를 설명하는 문제",
+        "비슷한 두 개념의 차이를 비교해 설명하는 문제",
+        "개념의 특징이나 목적을 설명하는 문제",
+        "사례를 주고 어떤 개념인지와 그 이유를 설명하는 문제",
+    ],
+    "코드": [
+        "반복문과 변수 누적을 추적하는 문제",
+        "배열·리스트 인덱스를 추적하는 문제",
+        "함수 호출 순서와 반환값을 추적하는 문제",
+        "조건 분기를 여러 번 거치는 문제",
+        "문자열을 다루는 문제",
+    ],
+}
 
 TYPE_GUIDE = {
     "단답형": "용어나 짧은 값 하나로 답하는 문제. 정답이 하나로 정해져야 한다.",
@@ -97,7 +121,9 @@ async def analyze_weakness(state: QuizState) -> dict:
     # 2) 그 안에서 약점 키워드를 우선으로 뽑는다
     weak = {k: len(records[k]) for k in pool if k in records}
     if weak and random.random() < WEAK_RATE:
-        keyword = random.choices(list(weak), weights=list(weak.values()))[0]
+        # 가중치에 상한을 둔다 → 7번 틀린 키워드와 1번 틀린 키워드가 7:1이 아니라 3:1
+        weights = [min(n, WEAK_CAP) for n in weak.values()]
+        keyword = random.choices(list(weak), weights=weights)[0]
         reason = f"약점 (오답 {weak[keyword]}회)"
     else:
         keyword = random.choice(pool)
@@ -122,6 +148,18 @@ def _pick_language(keyword: str) -> str:
     return random.choice(["c", "java", "python"])
 
 
+def _pick_focus(context: str) -> str:
+    """개념 자료에서 이번 문제의 중심 내용 하나를 고른다. (같은 키워드라도 매번 다른 부분을 묻게)"""
+    items = []
+    for line in context.splitlines()[1:]:  # 첫 줄(## 제목) 제외
+        if line.startswith("- "):
+            items.append(line)
+        elif line.startswith("  ") and items:
+            items[-1] += "\n" + line  # 하위 항목은 위 항목에 붙인다
+    items = [i for i in items if not i.startswith(("- 빈도", "- 시험 포인트"))]
+    return random.choice(items) if items else ""
+
+
 def generate_question(state: QuizState) -> dict:
     """RAG로 개념 자료를 찾고, 그 자료 안에서 문제를 만든다."""
     keyword = state["keyword"]
@@ -133,11 +171,15 @@ def generate_question(state: QuizState) -> dict:
     language = _pick_language(keyword) if qtype == "코드" else ""
 
     context = search(keyword, k=1)[0].page_content
+    style = random.choice(QUESTION_STYLES[qtype])
+    focus = _pick_focus(context)
 
     prompt = f"""정보처리기사 실기 문제를 1개 만들어라.
 
 키워드: {keyword}
 유형: {qtype} - {TYPE_GUIDE[qtype]}
+출제 형식: {style}
+이번 문제의 중심 내용: {focus}
 {f"언어: {language}" if language else ""}
 
 반드시 아래 자료 내용 안에서만 출제한다.
@@ -157,7 +199,7 @@ def generate_question(state: QuizState) -> dict:
         # 코드는 code에 따로 두고, 문제 문장은 고정한다 (보여주는 코드 = 실행하는 코드)
         question = f"다음 {language} 코드의 실행 결과를 쓰시오."
 
-    print(f"[출제] {qtype} (재출제 {state['retry_count']}회)")
+    print(f"[출제] {qtype} · {style} (재출제 {state['retry_count']}회)")
     return {
         "context": context,
         "question_type": qtype,
