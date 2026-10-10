@@ -95,7 +95,9 @@ def interrupt_kind() -> str | None:
 def snapshot() -> dict:
     """채점 결과를 보여주려고, 답을 내기 직전의 문제 정보를 저장해 둔다."""
     v = graph_values()
-    return {k: v.get(k) for k in ["question", "code", "language", "question_type", "keyword"]}
+    snap = {k: v.get(k) for k in ["question", "language", "question_type", "question_format", "keyword"]}
+    snap["code"] = v.get("shown_code")  # 코드 빈칸이면 빈칸 처리된 코드
+    return snap
 
 
 def start(total: int) -> None:
@@ -290,16 +292,20 @@ def question_card() -> None:
     past = len(v.get("past_titles") or [])
     tag = f":red-background[이전 오답 {past}회]" if past else ":gray-background[처음 보는 키워드]"
     with st.container(border=True):
-        st.markdown(f":{TYPE_COLOR[qtype]}-background[{qtype}] &nbsp; **{v['keyword']}** &nbsp; {tag}")
+        st.markdown(
+            f":{TYPE_COLOR[qtype]}-background[{qtype}] :gray-badge[{v['question_format']}] &nbsp; "
+            f"**{v['keyword']}** &nbsp; {tag}"
+        )
         question_text(v["question"])
-        if v.get("code"):
-            st.code(v["code"], language=v["language"])
+        if v.get("shown_code"):
+            st.code(v["shown_code"], language=v["language"])
 
+        hint = ss.result["__interrupt__"][0].value.get("hint", "")
         with st.form("answer_form", clear_on_submit=True, border=False):
             if qtype == "약술형":
                 answer = st.text_area("답", placeholder="1~2문장으로 설명하세요 (⌘+Enter로 제출)", height=100)
             else:
-                answer = st.text_input("답", placeholder="답을 입력하고 Enter")
+                answer = st.text_input("답", placeholder=f"{hint} · Enter로 제출" if hint else "답을 입력하고 Enter")
             if st.form_submit_button("제출", type="primary", width="stretch"):
                 submit_answer(answer)
                 st.rerun()
@@ -312,7 +318,7 @@ def question_card() -> None:
 def prev_question_box() -> None:
     p = ss.prev
     with st.container(border=True):
-        st.caption(f"{p['question_type']} · {p['keyword']}")
+        st.caption(f"{p['question_type']} · {p['question_format']} · {p['keyword']}")
         question_text(p["question"], prev=True)
         if p.get("code"):
             st.code(p["code"], language=p["language"])
@@ -377,10 +383,15 @@ def quiz_page() -> None:
             st.rerun()
         with st.expander("채점 기준", expanded=True):
             st.markdown(
-                "- **단답형**: 띄어쓰기 무시, 정확히 일치\n"
-                "- **약술형**: 핵심 단어 2개 이상 포함\n"
-                "- **코드**: 실제 실행 결과와 일치\n\n"
-                "오답이면 같은 뜻인지 직접 확인해요. (코드 제외)"
+                "**단답형**\n"
+                "- 용어 쓰기: 띄어쓰기 무시, 정확히 일치\n"
+                "- 보기에서 고르기: 고른 것이 모두 맞으면 (순서 무관)\n"
+                "- 빈칸·순서대로: 순서대로 모두 맞으면\n\n"
+                "**약술형**: 핵심 단어 2개 이상 포함\n\n"
+                "**코드**\n"
+                "- 실행 결과: 실제 실행 결과와 일치\n"
+                "- 코드 빈칸: 띄어쓰기 무시, 정확히 일치\n\n"
+                "답이 여러 개면 쉼표(,)로 구분해요. 오답이면 같은 뜻인지 직접 확인해요. (실행 결과 제외)"
             )
 
     phase = ss.get("phase")

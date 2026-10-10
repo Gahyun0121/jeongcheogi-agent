@@ -1,4 +1,5 @@
 import random
+import re
 from typing import TypedDict
 from langchain_openai import ChatOpenAI
 from langgraph.types import interrupt
@@ -12,20 +13,38 @@ from app.tools import run_code
 WEAK_RATE = 0.7  # 약점 키워드를 뽑을 확률
 RECENT_LIMIT = 3  # 최근 N문제에 나온 키워드는 다시 안 뽑음
 CODE_RATE = 0.4  # 랜덤 출제 때 코드 문제 비율 (실기는 코드 문제 비중이 큼)
-ESSAY_RATE = 0.3  # 이론 문제 중 약술형 비율 (최근 실기는 단답형 위주)
 WEAK_CAP = 3  # 오답 횟수 가중치 상한 (많이 틀린 키워드 하나에만 쏠리지 않게)
+LANGUAGES = ["c", "java", "python"]  # 출제할 언어 (안 배운 언어는 빼면 그 언어 키워드도 안 나옴)
+
+# 묻는 방식별 비율. 실기 유형은 단답형·약술형·코드뿐이고, 그 안에서 묻는 방식이 다르다 (최근 실기는 단답형 위주)
+THEORY_FORMATS = {"용어 쓰기": 35, "보기에서 고르기": 20, "빈칸 채우기": 15, "순서대로 쓰기": 10, "서술": 20}
+CODE_FORMATS = {"실행 결과": 75, "코드 빈칸": 25}
+FORMAT_TYPE = {"서술": "약술형", "실행 결과": "코드", "코드 빈칸": "코드"}  # 나머지는 단답형
+
+# 답 입력할 때 보여줄 안내 (답이 여러 개면 쉼표로 구분)
+ANSWER_HINT = {
+    "보기에서 고르기": "여러 개면 쉼표(,)로 구분",
+    "빈칸 채우기": "① 답, ② 답 순서로 쉼표(,)로 구분",
+    "순서대로 쓰기": "순서대로 쉼표(,)로 구분",
+    "서술": "1~2문장으로 설명",
+    "코드 빈칸": "( ① )에 들어갈 코드만",
+}
 
 
-llm = ChatOpenAI(model="gpt-5.4-mini")
+# 같은 코드 문제 6개로 비교했을 때 LLM 정답이 실제 실행 결과와 맞은 수:
+# gpt-5.4-mini 1/6, gpt-5.5 5/6, gpt-6.1-sol 5/6, gpt-6-sol 6/6 → 출제는 gpt-6-sol
+gen_llm = ChatOpenAI(model="gpt-6-sol")
+review_llm = ChatOpenAI(model="gpt-5.4-mini")  # 검수는 빠른 모델로 (코드 문제는 어차피 실행으로 확인)
 
 
 class Question(BaseModel):
     """LLM이 출제 결과를 이 형식으로 돌려준다."""
     title: str = Field(description="문제 내용을 15자 안팎으로 요약한 제목. 예: static 메서드 업캐스팅 출력")
     question: str = Field(description="문제 본문")
-    answer: str = Field(description="정답")
+    answer: str = Field(description="정답. 답이 여러 개면 쉼표로 구분")
     key_points: list[str] = Field(description="약술형이면 채점용 핵심 단어 2~3개, 아니면 빈 리스트")
     code: str = Field(description="코드 문제면 실행 가능한 전체 코드, 아니면 빈 문자열")
+    blank: str = Field(description="코드 빈칸 문제면 code에서 빈칸으로 만들 짧은 코드 조각, 아니면 빈 문자열")
 
 class Review(BaseModel):
     """LLM이 검수 결과를 이 형식으로 돌려준다."""
@@ -39,13 +58,11 @@ ERROR_PREFIXES = ("컴파일 에러", "컴파일 경고", "실행 에러", "시�
 
 # 실기에서 자주 쓰는 문제 형식 (기출 원문이 아니라 묻는 방식만). 매번 하나를 골라 같은 키워드라도 다르게 묻는다.
 QUESTION_STYLES = {
-    "단답형": [
+    "용어 쓰기": [
         "설명을 읽고 해당하는 용어를 쓰는 문제",
-        "<보기>에 용어 4~6개만 나열하고, 설명에 맞는 용어 하나를 골라 쓰는 문제 (정답은 번호 없이 용어만)",
-        "문장 속 빈칸( ① ) 하나에 들어갈 용어를 쓰는 문제",
         "사례나 상황을 주고, 그에 해당하는 개념을 쓰는 문제",
     ],
-    "약술형": [
+    "서술": [
         "개념의 정의를 설명하는 문제",
         "비슷한 두 개념의 차이를 비교해 설명하는 문제",
         "개념의 특징이나 목적을 설명하는 문제",
@@ -57,16 +74,28 @@ QUESTION_STYLES = {
         "함수 호출 순서와 반환값을 추적하는 문제",
         "조건 분기를 여러 번 거치는 문제",
         "문자열을 다루는 문제",
+        "언어의 주요 함수·메서드(문자열 함수 등)를 쓰는 문제",
     ],
 }
 
-TYPE_GUIDE = {
-    "단답형": "용어나 짧은 값 하나로 답하는 문제. 정답이 하나로 정해져야 한다.",
-    "약술형": "1~2문장으로 설명하는 문제. 채점용 핵심 단어 2~3개를 key_points에 넣는다. "
+CODE_RULES = ("코드는 표준 입력 없이 실행되고, 정의되지 않은 동작(같은 변수를 한 식에서 여러 번 증감 등)은 쓰지 않는다. "
+              "Java는 public class Main을 쓴다.")
+
+FORMAT_GUIDE = {
+    "용어 쓰기": "용어나 짧은 값 하나로 답하는 문제. 정답이 하나로 정해져야 한다.",
+    "보기에서 고르기": "<보기>에는 설명 문장이 아니라 용어만 5~7개 나열하고, 조건에 맞는 것을 골라 쓰게 한다. "
+                "답이 1개면 '하나를 골라 쓰시오', 2개 이상이면 '모두 골라 쓰시오'라고 쓴다. answer에는 기호(ㄱ, ①) 없이 보기의 용어를 쉼표로 구분해 쓴다.",
+    "빈칸 채우기": "문장이나 표에 ( ① ), ( ② ) 같은 빈칸을 1~3개 두고 채우게 한다. "
+                "빈칸 답은 괄호 없는 짧은 용어로 하고, answer에는 빈칸 번호 순서대로 쉼표로 구분해 쓴다.",
+    "순서대로 쓰기": "자료에서 순서가 있는 항목(강약 순서, 계층, 실행 순서 등)을 순서대로 쓰게 한다. "
+                "어떤 순서인지(예: 강한 것부터) 문제에 분명히 쓰고, 문제에 항목을 보여줄 때는 순서를 반드시 섞는다 (섞었다는 말은 쓰지 않는다). "
+                "answer에는 순서대로 쉼표로 구분해 쓴다.",
+    "서술": "1~2문장으로 설명하는 문제. 채점용 핵심 단어 2~3개를 key_points에 넣는다. "
             "핵심 단어는 괄호 없는 짧은 단어(1~2어절)로 쓴다.",
-    "코드": "코드의 출력 결과를 묻는 문제. 표준 입력 없이 실행되고, "
-            "정의되지 않은 동작(같은 변수를 한 식에서 여러 번 증감 등)은 쓰지 않는다. "
-            "Java는 public class Main을 쓴다.",
+    "실행 결과": "코드의 출력 결과를 묻는 문제. " + CODE_RULES,
+    "코드 빈칸": "실행 가능한 전체 코드를 code에 쓰고, 그중 빈칸으로 만들 짧은 코드 조각 하나(조건식, 연산자, 함수 호출 등)를 blank에 쓴다. "
+              "blank는 짧게(30자 이내) 잡되, code 전체에서 딱 한 번만 나오는 조각이어야 한다. "
+              "같은 글자가 다른 곳에도 있으면 조금 더 길게 잡는다 (예: 'n - 1'이 여러 번 나오면 'f(n - 1) * n'). " + CODE_RULES,
 }
 
 
@@ -79,13 +108,16 @@ class QuizState(TypedDict):
 
     # 2. 출제
     context: str            # RAG로 찾은 개념 자료
-    question_type: str      # "단답형" / "약술형" / "코드"
+    question_type: str      # 실기 유형: "단답형" / "약술형" / "코드"
+    question_format: str    # 묻는 방식: THEORY_FORMATS 또는 CODE_FORMATS 중 하나
     title: str              # 문제 요약 제목 (노션 제목용)
     question: str           # 문제 본문
     answer: str             # 정답
     key_points: list[str]   # 약술형 채점용 핵심 단어 2~3개
     language: str           # 코드 문제 언어 ("c" / "java" / "python")
-    code: str               # 코드 문제의 코드
+    code: str               # 코드 문제의 전체 코드 (실행용)
+    blank: str              # 코드 빈칸 문제에서 빈칸으로 만든 코드 조각
+    shown_code: str         # 화면에 보여줄 코드 (코드 빈칸이면 빈칸 처리된 코드)
 
     # 3. 검수
     review_ok: bool         # 검수 통과 여부
@@ -114,7 +146,7 @@ async def analyze_weakness(state: QuizState) -> dict:
     candidates = [k for k in categories if k not in recent]
 
     # 1) 코드/이론을 먼저 정한다 → 약점이 이론에 몰려 있어도 코드 문제 비율 유지
-    coding = [k for k in candidates if categories[k] == "프로그래밍"]
+    coding = [k for k in candidates if categories[k] == "프로그래밍" and _language_ok(k)]
     theory = [k for k in candidates if categories[k] != "프로그래밍"]
     pool = coding if coding and random.random() < CODE_RATE else theory
 
@@ -140,12 +172,20 @@ async def analyze_weakness(state: QuizState) -> dict:
     }
 
 
+LANGUAGE_PREFIX = [("C ", "c"), ("Java", "java"), ("Python", "python")]
+
+
+def _language_ok(keyword: str) -> bool:
+    """출제할 언어(LANGUAGES)에 없는 언어의 키워드는 뺀다. (예: Python을 안 배웠으면 Python 키워드 제외)"""
+    return all(lang in LANGUAGES for prefix, lang in LANGUAGE_PREFIX if keyword.startswith(prefix))
+
+
 def _pick_language(keyword: str) -> str:
-    """키워드에 언어가 있으면 그 언어, 없으면 3개 중 랜덤."""
-    for prefix, language in [("C ", "c"), ("Java", "java"), ("Python", "python")]:
+    """키워드에 언어가 있으면 그 언어, 없으면 LANGUAGES 중 랜덤."""
+    for prefix, language in LANGUAGE_PREFIX:
         if keyword.startswith(prefix):
             return language
-    return random.choice(["c", "java", "python"])
+    return random.choice(LANGUAGES)
 
 
 def _pick_focus(context: str) -> str:
@@ -163,23 +203,26 @@ def _pick_focus(context: str) -> str:
 def generate_question(state: QuizState) -> dict:
     """RAG로 개념 자료를 찾고, 그 자료 안에서 문제를 만든다."""
     keyword = state["keyword"]
-    if state["category"] == "프로그래밍":
-        qtype = "코드"
-    else:
-        qtype = "약술형" if random.random() < ESSAY_RATE else "단답형"
-
-    language = _pick_language(keyword) if qtype == "코드" else ""
-
     context = search(keyword, k=1)[0].page_content
-    style = random.choice(QUESTION_STYLES[qtype])
+
+    formats = dict(CODE_FORMATS if state["category"] == "프로그래밍" else THEORY_FORMATS)
+    if not re.search(r"→|>|순서|계층", context):
+        formats.pop("순서대로 쓰기", None)  # 자료에 순서가 없으면 LLM이 순서를 지어낸다
+    fmt = random.choices(list(formats), weights=list(formats.values()))[0]
+    qtype = FORMAT_TYPE.get(fmt, "단답형")
+    is_code = fmt in CODE_FORMATS
+    language = _pick_language(keyword) if is_code else ""
+
+    styles = QUESTION_STYLES.get("코드" if is_code else fmt, [])
+    style = random.choice(styles) if styles else ""
     focus = _pick_focus(context)
 
     prompt = f"""정보처리기사 실기 문제를 1개 만들어라.
 
 키워드: {keyword}
-유형: {qtype} - {TYPE_GUIDE[qtype]}
-출제 형식: {style}
-이번 문제의 중심 내용: {focus}
+유형: {qtype} ({fmt}) - {FORMAT_GUIDE[fmt]}
+{f"출제 형식: {style}" if style else ""}
+이번 문제의 중심 내용: {focus} (출제 방향일 뿐, 문제 문장에 그대로 쓰지 않는다)
 {f"언어: {language}" if language else ""}
 
 반드시 아래 자료 내용 안에서만 출제한다.
@@ -192,23 +235,26 @@ def generate_question(state: QuizState) -> dict:
     if state["review_feedback"]:
         prompt += f"\n[이전 문제가 검수에서 탈락한 이유]\n{state['review_feedback']}\n같은 문제가 생기지 않게 다시 만들어라.\n"
 
-    q = llm.with_structured_output(Question).invoke(prompt)
+    q = gen_llm.with_structured_output(Question).invoke(prompt)
 
     question = q.question
-    if qtype == "코드":
-        # 코드는 code에 따로 두고, 문제 문장은 고정한다 (보여주는 코드 = 실행하는 코드)
+    if is_code:
+        # 코드는 code에 따로 두고, 문제 문장은 고정한다. 코드 빈칸은 검수에서 실행 결과를 넣어 다시 만든다
         question = f"다음 {language} 코드의 실행 결과를 쓰시오."
 
-    print(f"[출제] {qtype} · {style} (재출제 {state['retry_count']}회)")
+    print(f"[출제] {qtype} · {fmt}{f' · {style}' if style else ''} (재출제 {state['retry_count']}회)")
     return {
         "context": context,
         "question_type": qtype,
+        "question_format": fmt,
         "title": q.title,
         "question": question,
         "answer": q.answer,
         "key_points": q.key_points,
         "language": language,
-        "code": q.code if qtype == "코드" else "",  # 이론 문제에 코드가 섞이지 않게
+        "code": q.code if is_code else "",  # 이론 문제에 코드가 섞이지 않게
+        "blank": q.blank.strip() if fmt == "코드 빈칸" else "",
+        "shown_code": "",  # 코드 문제는 검수에서 정한다
     }
 
 
@@ -216,33 +262,48 @@ def review_question(state: QuizState) -> dict:
     """문제를 검수한다. 코드 문제는 실제로 실행해서 정답을 확정한다."""
     fail = {"review_ok": False, "retry_count": state["retry_count"] + 1}
 
-    # 코드 문제: LLM 정답 대신 실제 실행 결과를 정답으로 쓴다
-    if state["question_type"] == "코드":
+    # 코드 문제: 실제로 실행해서 정답을 확정한다
+    if state["question_format"] in CODE_FORMATS:
         output = run_code.invoke({"language": state["language"], "code": state["code"]})
         if not output.strip() or output.startswith(ERROR_PREFIXES):
             print("[검수] 탈락 - 코드 실행 실패")
             return {**fail, "review_feedback": output[:500] or "출력이 없음"}
-
         real = output.strip()
+
+        if state["question_format"] == "코드 빈칸":
+            # 빈칸으로 만들 조각이 코드에 딱 한 번 있어야 빈칸 위치가 하나로 정해진다
+            blank = state["blank"]
+            if not blank or state["code"].count(blank) != 1:
+                print("[검수] 탈락 - 빈칸 위치가 하나로 정해지지 않음")
+                return {**fail, "review_feedback": f"blank '{blank}'가 code 안에 정확히 한 번 나와야 한다"}
+            print("[검수] 통과")
+            return {
+                "review_ok": True,
+                "answer": blank,
+                "question": f"다음 {state['language']} 코드의 실행 결과가 아래와 같을 때, ( ① )에 들어갈 코드를 쓰시오.\n\n[실행 결과]\n{real}",
+                "shown_code": state["code"].replace(blank, "( ① )", 1),
+            }
+
+        # 실행 결과: LLM 정답 대신 실제 실행 결과를 정답으로 쓴다
         if real != state["answer"].strip():
             print(f"[검수] LLM 정답 {state['answer']!r} → 실행 결과 {real!r}로 교체")
         print("[검수] 통과")
-        return {"review_ok": True, "answer": real}
+        return {"review_ok": True, "answer": real, "shown_code": state["code"]}
 
-    # 단답형·약술형: 자료와 비교해서 검사
+    # 이론 문제: 자료와 비교해서 검사
     prompt = f"""정보처리기사 실기 문제를 검수하라. 아래 기준 중 하나라도 어기면 탈락이다.
 1. 문제와 정답이 자료 내용과 맞는다.
-2. 정답이 하나로 정해진다. (단답형)
+2. 정답이 하나로 정해진다. 보기에서 고르기·빈칸 채우기·순서대로 쓰기는 정답 목록 전체가 하나로 정해진다.
 3. 약술형이면 채점용 핵심 단어 {state['key_points']}가 자료에 있고, 정답에 들어 있다.
 
 [자료]
 {state['context']}
 
-[유형] {state['question_type']}
+[유형] {state['question_type']} ({state['question_format']})
 [문제] {state['question']}
 [정답] {state['answer']}
 """
-    r = llm.with_structured_output(Review).invoke(prompt)
+    r = review_llm.with_structured_output(Review).invoke(prompt)
     if not r.ok:
         print(f"[검수] 탈락 - {r.reason}")
         return {**fail, "review_feedback": r.reason}
@@ -256,8 +317,10 @@ def ask_answer(state: QuizState) -> dict:
     user_answer = interrupt({
         "kind": "question",
         "question": state["question"],
-        "code": state["code"],
+        "code": state["shown_code"],
         "type": state["question_type"],
+        "format": state["question_format"],
+        "hint": ANSWER_HINT.get(state["question_format"], ""),
     })
     return {"user_answer": user_answer.strip()}
 
@@ -272,22 +335,34 @@ def _compact(text: str) -> str:
     return _normalize(text).replace(" ", "")
 
 
+def _split(text: str) -> list[str]:
+    """여러 개 답을 쉼표·화살표로 나누고, 앞에 붙은 번호(①, 1., (1))는 뗀다."""
+    parts = re.split(r"[,，、\n]|->|→", text)
+    return [_compact(re.sub(r"^\s*(?:[①-⑩]|\(\d+\)|\d+[.)])\s*", "", p)) for p in parts if p.strip()]
+
+
 def grade_answer(state: QuizState) -> dict:
     """정답 여부를 고정 규칙으로 채점한다."""
-    user = state["user_answer"]
+    user, answer, fmt = state["user_answer"], state["answer"], state["question_format"]
 
-    if state["question_type"] == "약술형":
+    if fmt == "서술":
         # 핵심 단어 포함 여부 (띄어쓰기 무시)
         key_points = state["key_points"]
         hits = [k for k in key_points if _compact(k) in _compact(user)]
         is_correct = len(hits) >= min(2, len(key_points))
         print(f"[채점] 핵심 단어 {len(hits)}/{len(key_points)}개 포함: {hits}")
-    elif state["question_type"] == "단답형":
+    elif fmt == "보기에서 고르기":
+        # 고른 것이 모두 맞으면 정답 (순서는 상관없음)
+        is_correct = sorted(_split(user)) == sorted(_split(answer))
+    elif fmt in ("빈칸 채우기", "순서대로 쓰기"):
+        # 빈칸 번호·나열 순서대로 맞아야 정답
+        is_correct = _split(user) == _split(answer)
+    elif fmt in ("용어 쓰기", "코드 빈칸"):
         # 띄어쓰기만 무시하고 엄격하게 비교 (같은 뜻인지는 사람이 확인)
-        is_correct = _compact(user) == _compact(state["answer"])
+        is_correct = _compact(user) == _compact(answer)
     else:
-        # 코드: 출력값은 띄어쓰기도 의미가 있어서 한 칸으로만 맞춘다 ("10 20" ≠ "1020")
-        is_correct = _normalize(user) == _normalize(state["answer"])
+        # 실행 결과: 출력값은 띄어쓰기도 의미가 있어서 한 칸으로만 맞춘다 ("10 20" ≠ "1020")
+        is_correct = _normalize(user) == _normalize(answer)
 
     print(f"[채점] {'정답' if is_correct else '오답'} (정답: {state['answer']})")
     return {

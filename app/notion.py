@@ -61,8 +61,8 @@ async def save_wrong_answer(state: dict) -> None:
     """틀린 문제를 오답 DB에 저장한다."""
     # 페이지 본문: 문제 문장 + (코드 문제면) 코드 블록
     children = [{"type": "paragraph", "paragraph": {"rich_text": _text(state["question"])}}]
-    if state["code"]:
-        children.append({"type": "code", "code": {"language": state["language"], "rich_text": _text(state["code"])}})
+    if state["shown_code"]:
+        children.append({"type": "code", "code": {"language": state["language"], "rich_text": _text(state["shown_code"])}})
 
     await _call("API-post-page", {
         "parent": {"data_source_id": DATA_SOURCE_ID},

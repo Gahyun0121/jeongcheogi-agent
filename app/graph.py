@@ -36,7 +36,7 @@ def route_after_grade(state: QuizState) -> str:
     """맞으면 종료 조건 확인, 틀리면 사람 확인 (코드 문제는 바로 오답 저장)."""
     if state["is_correct"]:
         return check_done(state)
-    if state["question_type"] == "코드":
+    if state["question_format"] == "실행 결과":
         return "save_wrong"  # 출력값은 정확해야 해서 확인하지 않는다
     return "confirm_answer"
 

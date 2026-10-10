@@ -26,11 +26,12 @@ async def main():
             # 오답일 때: 같은 뜻으로 썼는지 사람이 확인
             answer = input("같은 뜻으로 썼다면 y, 아니면 엔터: ")
         else:
-            print(f"\n===== 문제 {result['solved'] + 1}/{TOTAL} ({info['type']}) =====")
+            print(f"\n===== 문제 {result['solved'] + 1}/{TOTAL} ({info['type']} · {info['format']}) =====")
             print(info["question"])
             if info["code"]:
                 print("\n" + info["code"])
-            answer = input("\n답: ")
+            hint = f" ({info['hint']})" if info["hint"] else ""
+            answer = input(f"\n답{hint}: ")
 
         result = await graph.ainvoke(Command(resume=answer), config)
 
