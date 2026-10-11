@@ -14,16 +14,20 @@ client = MultiServerMCPClient({
     "notion": {
         "transport": "stdio",
         "command": "npx",
-        "args": ["-y", "@notionhq/notion-mcp-server"],
+        "args": ["-y", "--prefer-offline", "@notionhq/notion-mcp-server"],  # 한 번 받은 뒤로는 새 버전 확인 안 함 (느려짐 방지)
         "env": {"NOTION_TOKEN": os.environ["NOTION_TOKEN"], "PATH": os.environ["PATH"]},
     }
 })
 
 
+_tools = {}  # 도구 목록은 한 번만 받아 둔다 (받을 때마다 노션 서버를 새로 띄워서 느림)
+
+
 async def _call(tool_name: str, args: dict) -> dict:
     """MCP 도구를 이름으로 찾아 실행하고, 결과 JSON을 dict로 돌려준다."""
-    tools = await client.get_tools()
-    tool = next(t for t in tools if t.name == tool_name)
+    if not _tools:
+        _tools.update({t.name: t for t in await client.get_tools()})
+    tool = _tools[tool_name]
     result = await tool.ainvoke(args)
     text = result[0]["text"] if isinstance(result, list) else result
     data = json.loads(text)

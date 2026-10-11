@@ -54,7 +54,7 @@ st.markdown(
     .stat .sub {font-size: 0.78rem; color: #94A3B8;}
 
     /* 홈 아래 두 상자: 반투명 흰 바탕 */
-    .st-key-top3, .st-key-today {background: rgba(255,255,255,0.6); border: 1px solid rgba(110,170,210,0.25);
+    .st-key-top3, .st-key-today, .st-key-waittip {background: rgba(255,255,255,0.6); border: 1px solid rgba(110,170,210,0.25);
                                  border-radius: 16px; padding: 1.1rem 1.2rem;}
     .box-title {font-weight: 600; font-size: 1rem; color: #2E2A3A; margin-bottom: 0.6rem;}
     .rank {display: flex; align-items: center; gap: 0.9rem; padding: 0.85rem 0;}
@@ -72,8 +72,8 @@ st.markdown(
     .chip-cat {display: inline-block; font-size: 0.75rem; padding: 0.1rem 0.6rem; border-radius: 99px;
                background: #E4E6FB; color: #4A5490; margin-bottom: 1rem;}
     /* 오늘의 개념 본문: 강조 없이 담백하게, 행간 넉넉히 */
-    .st-key-today li {font-size: 0.92rem; line-height: 1.85; color: #4B5563; margin-bottom: 0.7rem;}
-    .st-key-today li li {font-size: 0.88rem; color: #6B7280; margin-top: 0.35rem;}
+    .st-key-today li, .st-key-waittip li {font-size: 0.92rem; line-height: 1.85; color: #4B5563; margin-bottom: 0.7rem;}
+    .st-key-today li li, .st-key-waittip li li {font-size: 0.88rem; color: #6B7280; margin-top: 0.35rem;}
 
     /* 채점 결과 카드: 글자는 진한 기본색, 색은 배경과 왼쪽 선에만 */
     .card {padding: 0.9rem 1.2rem; border-radius: 14px; margin: 0.6rem 0; color: #2E2A3A;
@@ -142,12 +142,31 @@ def snapshot() -> dict:
 SCOPES = {"전체": "전체", "코드만": "코드", "이론만": "이론"}  # 화면 이름 → State scope
 
 
+@contextlib.contextmanager
+def waiting(message: str):
+    """문제를 만드는 동안 스피너와 함께 랜덤 개념 하나를 보여준다."""
+    doc = random.choice(load_documents())
+    lines = [ln for ln in doc.page_content.splitlines()[1:] if not ln.startswith("- 빈도")]
+    with st.spinner(message):
+        box = st.empty()
+        with box.container(key="waittip"):
+            st.markdown(
+                f'<div class="box-title">기다리는 동안 개념 하나 볼까요?</div>'
+                f'<div class="today-kw">{html.escape(doc.metadata["keyword"])}</div>'
+                f'<span class="chip-cat">{html.escape(doc.metadata["category"])}</span>',
+                unsafe_allow_html=True,
+            )
+            st.markdown("\n".join(lines[:5]))
+        yield
+    box.empty()
+
+
 def start(total: int, scope: str) -> None:
     ss.graph = build_graph()
     ss.config = {"configurable": {"thread_id": str(uuid.uuid4())}}
     ss.total = total
     ss.gen_log = ss.grade_log = ""
-    with st.spinner("첫 문제를 만드는 중..."):
+    with waiting("첫 문제를 만드는 중..."):
         run_graph({"solved": 0, "total": total, "correct_count": 0, "recent_keywords": [], "scope": scope})
     ss.phase = "question"
     wrong_counts.clear()  # 개념 정리 페이지의 오답 횟수를 새로 불러오게
@@ -157,7 +176,7 @@ def submit_answer(answer: str) -> None:
     ss.prev = snapshot()
     ss.prev["user_answer"] = answer
     before = graph_values()["correct_count"]
-    with st.spinner("채점하고 다음 문제를 만드는 중..."):
+    with waiting("채점하고 다음 문제를 만드는 중..."):
         run_graph(Command(resume=answer))
 
     if interrupt_kind() == "confirm":
@@ -171,7 +190,7 @@ def submit_answer(answer: str) -> None:
 
 def confirm(same: bool) -> None:
     first_log = ss.grade_log  # 처음 채점한 기록도 같이 보여주려고 남겨 둔다
-    with st.spinner("다음 문제를 만드는 중..."):
+    with waiting("다음 문제를 만드는 중..."):
         run_graph(Command(resume="y" if same else ""))
     ss.grade_log = f"{first_log}\n{ss.grade_log}".strip()
     ss.prev["is_correct"] = same
